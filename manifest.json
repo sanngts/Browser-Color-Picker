@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser-Color-Picker",
-  "version": "2.0",
+  "version": "3.0",
   "description": "Browser Color Picker - pick colors from any webpage",
   "icons": {
     "16": "icons/icon-16.png",
@@ -9,7 +9,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_popup": "popup/popup.html",
+    "default_title": "Browser Color Picker",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png"
@@ -18,11 +18,16 @@
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "scripting",
+    "windows"
   ],
   "background": {
     "service_worker": "background/service-worker.js"
   },
+  "web_accessible_resources": [{
+    "resources": ["icons/icon-16.png", "icons/icon-48.png", "icons/icon-128.png"],
+    "matches": ["<all_urls>"]
+  }],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

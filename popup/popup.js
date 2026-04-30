@@ -464,7 +464,7 @@ function renderFavorites() {
 function addFavorite(hex) {
     // 达到收藏上限时不添加
     if (savedColors.length >= MAX_FAVORITES) return;
-    savedColors.push(hex);     // 追加到数组末尾
+    savedColors.unshift(hex);     // 插入到数组头部（最新在前）
     renderFavorites();         // 重新渲染列表
     // 持久化收藏颜色到 chrome.storage.local
     chrome.storage.local.set({ savedColors: savedColors });
@@ -516,9 +516,9 @@ btnSave.addEventListener("click", () => {
         // 已收藏 → 取消收藏
         savedColors.splice(index, 1);
     } else {
-        // 未收藏 → 添加收藏
+        // 未收藏 → 添加收藏（头部插入，最新在前）
         if (savedColors.length >= MAX_FAVORITES) return;
-        savedColors.push(colors.hex);
+        savedColors.unshift(colors.hex);
     }
 
     renderFavorites();    // 重新渲染收藏列表
@@ -585,10 +585,37 @@ btnPageRight.addEventListener('click', () => {
 
 // ========== 页面初始化 ==========
 // popup 每次打开时执行此初始化逻辑：
-//   1. 从 chrome.storage.local 加载持久化数据（收藏夹、历史、取色结果）
-//   2. 根据数据状态决定显示什么内容
+//   1. 检查 URL 参数中是否有取色结果（由 background 窗口创建时传入）
+//   2. 从 chrome.storage.local 加载持久化数据（收藏夹、历史、取色结果）
+//   3. 根据数据状态决定显示什么内容
 
 document.addEventListener("DOMContentLoaded", function () {
+    // ★ 优先检查 URL 参数中是否有取色结果
+    // 当 background 收到 PICKER_COMPLETE 消息后，通过 chrome.windows.create
+    // 打开 popup.html?result=#RRGGBB，这里直接解析并显示该颜色
+    const urlParams = new URLSearchParams(window.location.search);
+    const resultColor = urlParams.get('result');
+
+    if (resultColor) {
+        // 情况 0：通过 URL 参数直接获取颜色（取色完成后自动弹出的窗口）
+        // 先加载收藏夹和历史记录
+        chrome.storage.local.get(["colorHistory", "savedColors"], function (result) {
+            savedColors = result.savedColors || [];
+            renderFavorites();
+
+            colorHistory = result.colorHistory || [];
+            renderHistoryPage();
+
+            // 显示取色结果，添加到历史记录
+            updateColorInfo(resultColor, true);
+            // 自动复制 HEX 到剪贴板
+            copyColorToClipboard('hex', true);
+            // 清除 storage 中的新取色标记（如果有的话）
+            chrome.storage.local.set({ pickedColorNew: false });
+        });
+        return; // 跳过后续 storage 读取逻辑
+    }
+
     // 从 storage 一次性读取所有需要的数据
     chrome.storage.local.get(["pickedColor", "pickedColorNew", "colorHistory", "savedColors"], function (result) {
         // ---- 加载收藏夹 ----
