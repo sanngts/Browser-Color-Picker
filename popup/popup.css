@@ -417,6 +417,8 @@ body {
 /* 底部取色按钮的外层容器 */
 .popup__footer {
   display: flex;                      /* 弹性布局 */
+  flex-direction: column;             /* 子元素垂直排列 */
+  gap: 4px;                           /* 子元素间距 */
   justify-content: center;            /* 按钮水平居中 */
 }
 
@@ -451,4 +453,39 @@ body {
   opacity: 0.6;                       /* 禁用时半透明 */
   cursor: not-allowed;                /* 禁止点击光标 */
   transform: none;                    /* 禁用时不缩放，保持原大小 */
+}
+
+/* ========== 受限页面警告提示 ========== */
+/* 当扩展在受限页面（如 Edge Addons 商店）上使用时，显示此提示 */
+.popup__restricted-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: #FFF3CD;
+  border: 1px solid #FFC107;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.popup__restricted-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.popup__restricted-text {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.popup__restricted-text:first-of-type {
+  color: #E65100;
+}
+
+.popup__restricted-text:last-of-type {
+  color: #BF360C;
+  font-size: 12px;
+  font-weight: 500;
 }

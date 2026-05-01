@@ -19,7 +19,8 @@
     "activeTab",
     "storage",
     "scripting",
-    "windows"
+    "windows",
+    "tabs"
   ],
   "background": {
     "service_worker": "background/service-worker.js"
