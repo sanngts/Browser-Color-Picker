@@ -279,8 +279,8 @@ function pickColor() {
         // 截取当前可见标签页的屏幕截图（返回 base64 编码的 PNG data URL）
         chrome.tabs.captureVisibleTab(null, { format: "png" }, function (dataUrl) {
             if (chrome.runtime.lastError || !dataUrl) {
-                console.error("[Pick] 截图失败:", chrome.runtime.lastError);
-                resetPickBtn();
+                console.warn("[Pick] 截图失败，切换到 EyeDropper 模式:", chrome.runtime.lastError);
+                pickColorWithEyeDropper();
                 return;
             }
 
@@ -293,7 +293,8 @@ function pickColor() {
 /**
  * 向 content script 发送 START_PICKER 消息
  * 包含容错机制：首次发送失败时，尝试通过 chrome.scripting.executeScript
- * 动态注入 content script 到目标页面（处理 manifest 未自动匹配的页面，如新标签页等）
+ * 动态注入 content script 到目标页面
+ * 若注入也失败（受限页面），则使用 EyeDropper API 作为降级方案
  *
  * @param {number} tabId - 目标标签页 ID
  * @param {string} dataUrl - 截图的 base64 data URL
@@ -307,14 +308,14 @@ function sendPickerMessage(tabId, dataUrl, retryCount) {
         if (chrome.runtime.lastError) {
             if (retryCount === 0) {
                 // 首次发送失败 → 尝试动态注入 content script
-                // 适用场景：manifest 的 content_scripts 未自动匹配的页面
                 chrome.scripting.executeScript({
                     target: { tabId: tabId },
                     files: ["content-scripts/content.js"],
                 }, function () {
                     if (chrome.runtime.lastError) {
-                        console.error("[Pick] 注入失败:", chrome.runtime.lastError);
-                        resetPickBtn();
+                        // 注入也失败 → 受限页面，使用 EyeDropper API 降级
+                        console.warn("[Pick] 页面注入失败，切换到 EyeDropper 模式:", chrome.runtime.lastError);
+                        pickColorWithEyeDropper();
                         return;
                     }
                     // 注入成功，递归重试发送消息（retryCount = 1）
@@ -322,14 +323,81 @@ function sendPickerMessage(tabId, dataUrl, retryCount) {
                 });
                 return;
             }
-            // 重试仍然失败，放弃取色
-            console.error("[Pick] 启动失败");
-            resetPickBtn();
+            // 重试仍然失败 → 使用 EyeDropper API 降级
+            console.warn("[Pick] 消息发送失败，切换到 EyeDropper 模式");
+            pickColorWithEyeDropper();
             return;
         }
         // 消息发送成功 → 关闭 popup，让用户在页面上使用放大镜取色
         window.close();
     });
+}
+
+/**
+ * 使用 EyeDropper API 进行取色（受限页面的降级方案）
+ * 当 content script 无法注入时，使用浏览器原生的 EyeDropper API
+ * 注意：EyeDropper API 无法显示放大镜，但能完成基本取色功能
+ * 取色成功后直接在 popup 内更新 UI，不关闭窗口
+ */
+function pickColorWithEyeDropper() {
+    // 检查 EyeDropper API 是否可用
+    if (!window.EyeDropper) {
+        console.error("[Pick] EyeDropper API 不支持");
+        resetPickBtn();
+        return;
+    }
+
+    btnPick.disabled = true;
+    btnPick.textContent = 'Picking...';
+
+    const eyeDropper = new EyeDropper();
+    eyeDropper.open()
+        .then(function (result) {
+            // 取色成功，获取颜色值
+            // EyeDropper API 返回的 sRGBHex 是 HEX 字符串（如 "#FF0000"），直接使用
+            const hex = result.sRGBHex;
+
+            // 通过 background script 可靠保存取色结果（popup 可能被 EyeDropper 关闭）
+            chrome.runtime.sendMessage({
+                type: "PICK_RESULT",
+                color: hex
+            });
+
+            // 同时直接保存到 storage 作为备份
+            chrome.storage.local.set({
+                pickedColor: hex,
+                pickedColorNew: true
+            });
+
+            // 尝试在 popup 内更新 UI（EyeDropper 可能已关闭 popup，DOM 可能不存在）
+            try {
+                updateColorInfo(hex, true);
+                copyColorToClipboard('hex', true);
+                btnPick.disabled = false;
+            } catch (e) {
+                // popup 已被关闭，忽略 UI 更新错误，颜色已保存到 storage
+                // 下次打开 popup 时会从 storage 读取并显示
+            }
+        })
+        .catch(function (error) {
+            // 用户取消取色或出错
+            console.error("[Pick] EyeDropper 取色失败:", error);
+            resetPickBtn();
+        });
+}
+
+/**
+ * RGB 转换为 HEX 颜色字符串
+ * @param {number} r - 红色分量 (0-255)
+ * @param {number} g - 绿色分量 (0-255)
+ * @param {number} b - 蓝色分量 (0-255)
+ * @returns {string} HEX 颜色值（如 "#FF6B6B"）
+ */
+function rgbToHex(r, g, b) {
+    return '#' +
+        [r, g, b].map(function (v) {
+            return v.toString(16).padStart(2, '0');
+        }).join('').toUpperCase();
 }
 
 /** 重置 Pick 按钮到默认可点击状态 */
@@ -464,7 +532,7 @@ function renderFavorites() {
 function addFavorite(hex) {
     // 达到收藏上限时不添加
     if (savedColors.length >= MAX_FAVORITES) return;
-    savedColors.push(hex);     // 追加到数组末尾
+    savedColors.unshift(hex);     // 插入到数组头部（最新在前）
     renderFavorites();         // 重新渲染列表
     // 持久化收藏颜色到 chrome.storage.local
     chrome.storage.local.set({ savedColors: savedColors });
@@ -516,9 +584,9 @@ btnSave.addEventListener("click", () => {
         // 已收藏 → 取消收藏
         savedColors.splice(index, 1);
     } else {
-        // 未收藏 → 添加收藏
+        // 未收藏 → 添加收藏（头部插入，最新在前）
         if (savedColors.length >= MAX_FAVORITES) return;
-        savedColors.push(colors.hex);
+        savedColors.unshift(colors.hex);
     }
 
     renderFavorites();    // 重新渲染收藏列表
@@ -583,12 +651,96 @@ btnPageRight.addEventListener('click', () => {
     }
 });
 
+// ========== 受限页面检测（在 DOMContentLoaded 之前定义，避免变量提升问题） ==========
+// 这些页面浏览器内核层面禁止内容脚本注入，使用 EyeDropper 降级方案
+var RESTRICTED_PATTERNS = [
+    /^https?:\/\/microsoftedge\.microsoft\.com\/addons\//i,
+    /^https?:\/\/chromewebstore\.google\.com\//i,
+    /^chrome:\/\/.*/i,
+    /^edge:\/\/.*/i,
+    /^chrome-extension:\/\/.*/i,
+    /^edge-extension:\/\/.*/i,
+    /^about:.*/i,
+    /^devtools:\/\/.*/i,
+];
+
+/**
+ * 检测当前活动标签页是否为受限页面
+ * 注意：popup 的 window.location.href 是 chrome-extension://...，不能用来判断
+ * 需要通过 chrome.tabs.query 获取当前标签页的实际 URL
+ *
+ * @param {function(boolean): void} callback - 回调函数，参数为是否受限
+ */
+function isRestrictedPage(callback) {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (!tabs || !tabs[0] || !tabs[0].url) {
+            callback(false);
+            return;
+        }
+        var isRestricted = RESTRICTED_PATTERNS.some(function (pattern) {
+            return pattern.test(tabs[0].url);
+        });
+        callback(isRestricted);
+    });
+}
+
+/**
+ * 显示受限页面提示
+ * 在 Pick 按钮上方显示警告信息，提醒用户取色功能不完整
+ */
+function showRestrictedNotice() {
+    var footer = document.querySelector('.popup__footer');
+    if (!footer) return;
+
+    var notice = document.createElement('div');
+    notice.className = 'popup__restricted-notice';
+    notice.innerHTML =
+        '<span class="popup__restricted-icon">\u26A0\uFE0F</span>' +
+        '<span class="popup__restricted-text">Limited mode: Incomplete functionality, please switch pages</span>' +
+        '<span class="popup__restricted-text">\u53D7\u9650\u6A21\u5F0F\uFF1A\u529F\u80FD\u4E0D\u5168\uFF0C\u8BF7\u66F4\u6362\u7F51\u9875</span>';
+
+    footer.insertBefore(notice, btnPick);
+}
+
 // ========== 页面初始化 ==========
 // popup 每次打开时执行此初始化逻辑：
-//   1. 从 chrome.storage.local 加载持久化数据（收藏夹、历史、取色结果）
-//   2. 根据数据状态决定显示什么内容
+//   1. 检查 URL 参数中是否有取色结果（由 background 窗口创建时传入）
+//   2. 从 chrome.storage.local 加载持久化数据（收藏夹、历史、取色结果）
+//   3. 根据数据状态决定显示什么内容
 
 document.addEventListener("DOMContentLoaded", function () {
+    // 检测是否为受限页面，如果是则显示提示
+    isRestrictedPage(function (restricted) {
+        if (restricted) {
+            showRestrictedNotice();
+        }
+    });
+    // ★ 优先检查 URL 参数中是否有取色结果
+    // 当 background 收到 PICKER_COMPLETE 消息后，通过 chrome.windows.create
+    // 打开 popup.html?result=#RRGGBB，这里直接解析并显示该颜色
+    const urlParams = new URLSearchParams(window.location.search);
+    const resultColor = urlParams.get('result');
+
+    if (resultColor) {
+        // 情况 0：通过 URL 参数直接获取颜色（取色完成后自动弹出的窗口）
+        // 先加载收藏夹和历史记录
+        chrome.storage.local.get(["colorHistory", "savedColors"], function (result) {
+            savedColors = result.savedColors || [];
+            renderFavorites();
+
+            colorHistory = result.colorHistory || [];
+            renderHistoryPage();
+
+            // 显示取色结果，添加到历史记录
+            updateColorInfo(resultColor, true);
+            // 自动复制 HEX 到剪贴板
+            copyColorToClipboard('hex', true);
+            // 清除 storage 中的新取色标记（如果有的话）
+            chrome.storage.local.set({ pickedColorNew: false });
+        });
+        return; // 跳过后续 storage 读取逻辑
+    }
+
     // 从 storage 一次性读取所有需要的数据
     chrome.storage.local.get(["pickedColor", "pickedColorNew", "colorHistory", "savedColors"], function (result) {
         // ---- 加载收藏夹 ----
